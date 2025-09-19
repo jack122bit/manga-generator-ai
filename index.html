@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Manga Generator</title>
+    <link rel="stylesheet" href="index.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/genai": "https://esm.sh/@google/genai@1.0.0",
+          "jspdf": "https://esm.sh/jspdf@2.5.1",
+          "jszip": "https://esm.sh/jszip@3.10.1",
+          "gif.js.optimized": "https://esm.sh/gif.js.optimized@1.0.1"
+        }
+      }
+    </script>
+</head>
+<body>
+    <main id="app-container">
+        <header>
+            <h1>AI Manga Generator</h1>
+            <p>Describe your story, and watch it come to life as a manga!</p>
+        </header>
+        <form id="manga-form">
+            <label for="style-preset-select">Choose a Style Preset:</label>
+            <select id="style-preset-select">
+                <option value="custom">Custom (from prompt)</option>
+                <option value="shonen">Shonen Jump</option>
+                <option value="seinen">Dark Fantasy Seinen</option>
+                <option value="shoujo">Slice of Life Shoujo</option>
+                <option value="ghibli">Ghibli-Inspired</option>
+                <option value="scifi">Classic 80s Sci-Fi</option>
+            </select>
+            <label for="prompt-input">Your manga idea:</label>
+            <textarea id="prompt-input" name="prompt" rows="4" placeholder="e.g., A lost samurai finds a mysterious cat that can talk." required></textarea>
+            <div class="form-row">
+                <div>
+                    <label for="chapter-count-input">Number of Chapters:</label>
+                    <input type="number" id="chapter-count-input" value="3" min="1" max="20" required>
+                </div>
+                <div>
+                    <label for="panels-per-chapter-input">Panels per Chapter:</label>
+                    <input type="number" id="panels-per-chapter-input" value="4" min="1" max="24" required>
+                </div>
+            </div>
+            <div class="form-buttons">
+                <button type="submit" id="generate-button">Generate Manga</button>
+                <button type="button" id="continue-last-button" class="hidden">Continue Last Story</button>
+                <button type="button" id="start-over-button" class="hidden">Start Over</button>
+            </div>
+        </form>
+        <div id="loader" class="hidden">
+            <div class="spinner"></div>
+            <div class="progress-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <p id="loader-message">Starting generation...</p>
+            <p id="loader-sub-message"></p>
+        </div>
+        <div id="post-generation-actions" class="hidden">
+             <button type="button" id="view-character-sheet-button">Character Sheet</button>
+            <div id="pdf-export-dropdown" class="dropdown">
+                <button type="button" id="download-button" class="dropdown-toggle" title="Download manga as a PDF">Download as PDF</button>
+                <div id="pdf-export-options" class="dropdown-content">
+                    <!-- Options will be populated by JS -->
+                </div>
+            </div>
+             <button type="button" id="export-images-button">Export as Images</button>
+             <button type="button" id="export-gif-button">Export as GIF</button>
+             <button type="button" id="continue-story-button">Continue Story</button>
+        </div>
+        <section id="storyboard-container" class="hidden">
+            <h2>Storyboard Review</h2>
+            <p>Review and edit panel descriptions before generating images. This is your chance to refine the story!</p>
+            <div id="storyboard-grid"></div>
+            <div id="storyboard-actions">
+                <button id="view-storyboard-character-sheet-button" class="reader-nav-button secondary">View Character Sheet</button>
+                <button id="generate-images-button" class="reader-nav-button">Generate All Panel Images</button>
+            </div>
+        </section>
+        <section id="manga-container" aria-live="polite"></section>
+    </main>
+
+    <!-- Reader Mode Overlay -->
+    <div id="reader-view" class="hidden">
+        <audio id="reader-audio" src="https://www.chosic.com/wp-content/uploads/2024/02/Slow-Day.mp3" loop></audio>
+        <audio id="sfx-audio" src="https://assets.codepen.io/28963/page-flip.mp3" preload="auto"></audio>
+        <button id="close-reader-button" aria-label="Close reader">&times;</button>
+        <div class="reader-content">
+            <div id="share-notification" class="hidden"></div>
+            <div class="reader-top-controls">
+                <button id="music-toggle-button" class="sound-toggle-button" aria-label="Mute/unmute music" title="Toggle Music (M)">🎵</button>
+                <button id="sfx-toggle-button" class="sound-toggle-button" aria-label="Mute/unmute sound effects" title="Toggle SFX">🔊</button>
+                <button id="narration-toggle-button" class="sound-toggle-button" aria-label="Toggle narration" title="Toggle Narration">🗣️</button>
+                <button id="regenerate-image-button" class="sound-toggle-button" aria-label="Regenerate or edit panel image" title="Regenerate Image">✨</button>
+                <button id="edit-image-button" class="sound-toggle-button" aria-label="Edit panel image" title="Edit Image">🖌️</button>
+                <button id="filter-button" class="sound-toggle-button" aria-label="Apply image filter" title="Image Filters">🎨</button>
+                <button id="add-text-button" class="sound-toggle-button" aria-label="Add text overlay" title="Add Text">🇹</button>
+                <button id="link-panel-button" class="sound-toggle-button" aria-label="Link panel" title="Create custom navigation link">🔗</button>
+                <button id="delete-panel-button" class="sound-toggle-button" aria-label="Delete panel" title="Delete Panel">🗑️</button>
+            </div>
+            <div id="filter-options" class="hidden">
+                <button data-filter="none">None</button>
+                <div class="filter-control-divider"></div>
+                <div class="filter-control">
+                    <label for="sketch-slider">Sketch: <span id="sketch-value">0</span>%</label>
+                    <input type="range" id="sketch-slider" class="filter-intensity-slider" data-filter="sketch" min="0" max="100" step="1">
+                </div>
+                <div class="filter-control">
+                    <label for="grayscale-slider">Grayscale: <span id="grayscale-value">0</span>%</label>
+                    <input type="range" id="grayscale-slider" class="filter-intensity-slider" data-filter="grayscale" min="0" max="100" step="1">
+                </div>
+                 <div class="filter-control">
+                    <label for="sepia-slider">Sepia: <span id="sepia-value">0</span>%</label>
+                    <input type="range" id="sepia-slider" class="filter-intensity-slider" data-filter="sepia" min="0" max="100" step="1">
+                </div>
+                 <div class="filter-control">
+                    <label for="invert-slider">Invert: <span id="invert-value">0</span>%</label>
+                    <input type="range" id="invert-slider" class="filter-intensity-slider" data-filter="invert" min="0" max="100" step="1">
+                </div>
+                <div class="filter-control-divider"></div>
+                <div class="filter-control" id="blur-control">
+                    <label for="blur-slider">Blur: <span id="blur-value">0</span>px</label>
+                    <input type="range" id="blur-slider" min="0" max="10" step="0.5" value="0">
+                </div>
+                <div class="filter-control-divider"></div>
+                <button id="clear-all-filters-button">Clear All Filters</button>
+            </div>
+            <h2 id="reader-chapter-title"></h2>
+            <div id="reader-image-wrapper">
+                <img id="reader-image" src="" alt="Current manga panel">
+                <canvas id="edit-canvas"></canvas>
+                <canvas id="selection-canvas"></canvas>
+                <div id="image-edit-toolbar" class="hidden">
+                     <details class="toolbar-section" open>
+                        <summary>Brush</summary>
+                        <div>
+                            <div class="toolbar-group">
+                                <label title="Brush Color">Color:</label>
+                                <button class="brush-color-input active" data-color="#000000" style="background-color: #000;" aria-label="Black" title="Black"></button>
+                                <button class="brush-color-input" data-color="#FFFFFF" style="background-color: #fff;" aria-label="White" title="White"></button>
+                            </div>
+                            <div class="toolbar-group">
+                                <label for="brush-size" title="Brush Size">Size:</label>
+                                <input type="range" id="brush-size" min="1" max="50" value="5" title="Adjust Brush Size">
+                            </div>
+                            <div class="toolbar-group">
+                                <label title="Brush Shape">Shape:</label>
+                                <button class="toolbar-button brush-shape-button active" data-shape="round" title="Round Brush">●</button>
+                                <button class="toolbar-button brush-shape-button" data-shape="square" title="Square Brush">■</button>
+                                <button class="toolbar-button brush-shape-button" data-shape="spray" title="Spray Brush">▒</button>
+                                <button class="toolbar-button brush-shape-button" data-shape="star" title="Star Brush">★</button>
+                                <button class="toolbar-button brush-shape-button" data-shape="triangle" title="Triangle Brush">▲</button>
+                            </div>
+                            <div class="toolbar-group">
+                                <label for="blend-mode-select" title="Brush Blend Mode">Blend:</label>
+                                <select id="blend-mode-select" class="toolbar-select" title="Change Brush Blend Mode">
+                                    <option value="source-over">Normal</option>
+                                    <option value="multiply">Multiply</option>
+                                    <option value="screen">Screen</option>
+                                    <option value="overlay">Overlay</option>
+                                    <option value="darken">Darken</option>
+                                    <option value="lighten">Lighten</option>
+                                    <option value="color-dodge">Color Dodge</option>
+                                    <option value="color-burn">Color Burn</option>
+                                    <option value="difference">Difference</option>
+                                </select>
+                            </div>
+                        </div>
+                    </details>
+                    <details class="toolbar-section" open>
+                        <summary>Tools</summary>
+                        <div class="toolbar-group">
+                            <button id="eraser-toggle-button" class="toolbar-button" title="Toggle Eraser">Eraser</button>
+                            <button id="gen-fill-button" class="toolbar-button" title="Generative Fill (select an area)">Fill</button>
+                        </div>
+                    </details>
+                    <details class="toolbar-section" open>
+                        <summary>History</summary>
+                         <div class="toolbar-group">
+                            <button id="undo-button" class="toolbar-button" disabled title="Undo (Ctrl+Z)">Undo</button>
+                            <button id="redo-button" class="toolbar-button" disabled title="Redo (Ctrl+Y)">Redo</button>
+                        </div>
+                    </details>
+                    <div class="toolbar-actions">
+                        <button id="edit-save-button" class="toolbar-button" title="Save Changes">Save</button>
+                        <button id="edit-cancel-button" class="toolbar-button" title="Discard Changes">Cancel</button>
+                    </div>
+                </div>
+                <div id="reader-image-overlay-container"></div>
+                <div id="panel-link-indicator" class="hidden"></div>
+            </div>
+            <div class="reader-caption-container">
+                 <p id="reader-caption"></p>
+                 <button id="edit-dialogue-button" class="sound-toggle-button" aria-label="Edit dialogue" title="Edit Dialogue">✏️</button>
+                 <div id="dialogue-edit-overlay" class="hidden">
+                    <textarea id="dialogue-edit-textarea"></textarea>
+                    <div class="dialogue-edit-actions">
+                        <button id="dialogue-save-button">Save</button>
+                        <button id="dialogue-cancel-button">Cancel</button>
+                    </div>
+                </div>
+            </div>
+             <div id="reader-search-filter-bar">
+                <input type="search" id="reader-search-input" placeholder="Search dialogue...">
+                <div id="reader-filter-toggles" class="toolbar-group">
+                    <button class="toolbar-button" data-filter-type="has-filter" title="Show only panels with image filters applied">Has Filter</button>
+                    <button class="toolbar-button" data-filter-type="has-text" title="Show only panels with text overlays">Has Text</button>
+                </div>
+                <button id="reader-clear-filter-button" class="toolbar-button" title="Clear search and filters">Clear</button>
+            </div>
+            <div id="reader-thumbnail-container"></div>
+            <div class="reader-nav">
+                <button id="prev-chapter-button" class="reader-nav-button secondary" title="Previous Chapter">« Chapter</button>
+                <button id="prev-button" class="reader-nav-button">Previous</button>
+                <span id="reader-page-indicator"></span>
+                <button id="share-button" class="reader-nav-button">Share</button>
+                <button id="next-button" class="reader-nav-button">Next</button>
+                <button id="next-chapter-button" class="reader-nav-button secondary" title="Next Chapter">Chapter »</button>
+            </div>
+             <div class="reader-sub-nav">
+                <label for="speed-select">Narration:</label>
+                <button id="play-pause-button" class="sound-toggle-button" aria-label="Play slideshow" title="Play/Pause slideshow">▶️</button>
+                <select id="speed-select" aria-label="Narration speed" title="Narration speed">
+                    <option value="0.8">Slow</option>
+                    <option value="1" selected>Medium</option>
+                    <option value="1.2">Fast</option>
+                </select>
+                <select id="voice-select" aria-label="Narration voice" title="Narration voice"></select>
+                <div class="volume-control">
+                    <label for="music-volume-slider" aria-label="Music volume">🎵</label>
+                    <input type="range" id="music-volume-slider" min="0" max="1" step="0.05" title="Music Volume">
+                </div>
+                <div class="volume-control">
+                    <label for="sfx-volume-slider" aria-label="Sound effects volume">🔊</label>
+                    <input type="range" id="sfx-volume-slider" min="0" max="1" step="0.05" title="SFX Volume">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Regeneration Modal -->
+    <div id="regeneration-modal" class="hidden">
+        <div class="modal-content">
+            <button id="close-modal-button" aria-label="Close modal">&times;</button>
+            <h2>Image Regeneration Studio</h2>
+            <p>Refine the description below to alter the generated image for this panel.</p>
+            <textarea id="modal-description-input" rows="6"></textarea>
+            <div id="modal-loader" class="hidden">
+                <div class="spinner"></div>
+                <p>Generating new image...</p>
+            </div>
+            <p id="modal-error" class="error-message" style="display: none;"></p>
+            <div class="modal-actions">
+                <button id="modal-regenerate-button" class="reader-nav-button">Regenerate</button>
+                <button id="modal-cancel-button" class="reader-nav-button secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Layer & Text Editor Modal -->
+    <div id="text-overlay-editor" class="hidden">
+        <div class="modal-content large">
+            <h2>Layer & Text Editor</h2>
+            <div class="text-editor-layout">
+                <div class="text-editor-main">
+                    <!-- Text Layer Controls -->
+                    <div id="text-layer-controls">
+                        <label for="text-overlay-input">Text:</label>
+                        <textarea id="text-overlay-input" rows="3"></textarea>
+                        <div class="text-style-controls">
+                            <div>
+                                <label for="text-overlay-size">Font Size:</label>
+                                <input type="number" id="text-overlay-size" min="10" max="100" value="32">
+                            </div>
+                            <div>
+                                <label for="text-overlay-color">Color:</label>
+                                <input type="color" id="text-overlay-color" value="#FFFFFF">
+                            </div>
+                            <div>
+                                <label for="text-overlay-outline-width">Outline:</label>
+                                <input type="number" id="text-overlay-outline-width" min="0" max="10" value="2">
+                            </div>
+                            <div>
+                                <label for="text-overlay-outline-color">O-Color:</label>
+                                <input type="color" id="text-overlay-outline-color" value="#000000">
+                            </div>
+                            <div class="control-span-2">
+                                <label for="text-overlay-font">Font:</label>
+                                <select id="text-overlay-font">
+                                    <option value="Arial, sans-serif">Arial</option>
+                                    <option value="'Comic Sans MS', cursive, sans-serif">Comic Sans</option>
+                                    <option value="'Courier New', monospace">Courier New</option>
+                                    <option value="Georgia, serif">Georgia</option>
+                                    <option value="'Times New Roman', Times, serif">Times New Roman</option>
+                                    <option value="Verdana, sans-serif">Verdana</option>
+                                </select>
+                            </div>
+                            <div class="control-span-2 alignment-controls">
+                                <label>Align:</label>
+                                <button class="toolbar-button" data-align="left">Left</button>
+                                <button class="toolbar-button active" data-align="center">Center</button>
+                                <button class="toolbar-button" data-align="right">Right</button>
+                            </div>
+                            <div class="control-span-2 filter-control-divider" style="margin: 0.5rem 0;"></div>
+                            <div>
+                                <label for="text-overlay-shadow-x">Shadow X:</label>
+                                <input type="number" id="text-overlay-shadow-x" min="-20" max="20" value="2">
+                            </div>
+                            <div>
+                                <label for="text-overlay-shadow-y">Shadow Y:</label>
+                                <input type="number" id="text-overlay-shadow-y" min="-20" max="20" value="2">
+                            </div>
+                            <div>
+                                <label for="text-overlay-shadow-blur">S-Blur:</label>
+                                <input type="number" id="text-overlay-shadow-blur" min="0" max="30" value="3">
+                            </div>
+                            <div>
+                                <label for="text-overlay-shadow-color">S-Color:</label>
+                                <input type="color" id="text-overlay-shadow-color" value="#000000">
+                            </div>
+                            <div class="control-span-2 filter-control-divider" style="margin: 0.5rem 0;"></div>
+                            <div class="control-span-2">
+                                <label for="text-overlay-line-height">Line Spacing:</label>
+                                <input type="range" id="text-overlay-line-height" min="0.8" max="2.5" step="0.1" value="1.2">
+                            </div>
+                            <div class="control-span-2">
+                                <label for="text-overlay-letter-spacing">Letter Spacing:</label>
+                                <input type="range" id="text-overlay-letter-spacing" min="-2" max="10" step="0.5" value="0">
+                            </div>
+                             <div class="control-span-2">
+                                <label for="text-overlay-opacity">Opacity:</label>
+                                <input type="range" id="text-overlay-opacity" min="0" max="1" step="0.05" value="1">
+                            </div>
+                            <div class="control-span-2 alignment-controls">
+                                <label>Decoration:</label>
+                                <button class="toolbar-button" data-decoration="underline">U</button>
+                                <button class="toolbar-button" data-decoration="line-through">S</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Drawing Layer Controls -->
+                    <div id="drawing-layer-controls" class="hidden">
+                        <h3>Drawing Layer</h3>
+                        <div class="text-style-controls">
+                            <div class="control-span-2">
+                                <label for="drawing-layer-opacity">Opacity:</label>
+                                <input type="range" id="drawing-layer-opacity" min="0" max="1" step="0.05" value="1">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="text-editor-sidebar">
+                    <h3>Layers</h3>
+                    <ul id="text-overlay-layer-list">
+                        <!-- Layer items will be populated by JS -->
+                    </ul>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="text-overlay-delete-button" class="reader-nav-button secondary hidden">Delete</button>
+                <button id="text-overlay-close-button" class="reader-nav-button secondary">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Storyboard Edit Modal -->
+    <div id="storyboard-edit-modal" class="hidden">
+        <div class="modal-content">
+            <button id="storyboard-close-modal-button" aria-label="Close modal">&times;</button>
+            <h2>Edit Panel Description</h2>
+            <p>Modify the visual description for the image generation model.</p>
+            <textarea id="storyboard-description-input" rows="8"></textarea>
+            <div class="modal-actions">
+                <button id="storyboard-save-button" class="reader-nav-button">Save</button>
+                <button id="storyboard-cancel-button" class="reader-nav-button secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Generative Fill Modal -->
+    <div id="gen-fill-modal" class="hidden">
+        <div class="modal-content">
+            <button id="close-gen-fill-modal-button" aria-label="Close modal">&times;</button>
+            <h2>Generative Fill</h2>
+            <p>Describe what you want to generate in the selected area.</p>
+            <textarea id="gen-fill-prompt-input" rows="3" placeholder="e.g., a small dragon, a glowing sword..."></textarea>
+            <div id="gen-fill-loader" class="hidden">
+                <div class="spinner"></div>
+                <p>Generating fill...</p>
+            </div>
+            <p id="gen-fill-error" class="error-message" style="display: none;"></p>
+            <div class="modal-actions">
+                <button id="gen-fill-generate-button" class="reader-nav-button">Generate</button>
+                <button id="gen-fill-cancel-button" class="reader-nav-button secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Character Sheet Modal -->
+    <div id="character-sheet-modal" class="hidden">
+        <div class="modal-content large">
+            <button id="character-sheet-close-button" aria-label="Close modal">&times;</button>
+            <h2>Character Sheet</h2>
+            <div class="character-sheet-container">
+                <div id="character-list-container">
+                    <ul id="character-list">
+                        <!-- Character items will be populated by JS -->
+                    </ul>
+                </div>
+                <div id="character-details-view">
+                    <div id="character-art-container">
+                        <img id="character-art-image" src="" alt="Character Portrait">
+                        <div id="character-art-placeholder" class="hidden">
+                            <span>No Portrait Generated</span>
+                        </div>
+                        <div id="character-art-loader" class="hidden">
+                            <div class="spinner"></div>
+                            <p>Generating Portrait...</p>
+                        </div>
+                        <div class="character-art-actions">
+                            <button id="generate-character-art-button">Generate Portrait</button>
+                            <button id="edit-character-art-button" class="hidden">Edit</button>
+                        </div>
+                    </div>
+                    <div class="character-edit-fields">
+                        <label for="character-name-input">Name:</label>
+                        <input type="text" id="character-name-input">
+                        <label for="character-description-textarea">Description:</label>
+                        <textarea id="character-description-textarea" rows="8"></textarea>
+                        <div class="modal-actions">
+                             <button id="save-character-changes-button" class="reader-nav-button">Save Changes</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Story Continuation Modal -->
+    <div id="continue-story-modal" class="hidden">
+        <div class="modal-content">
+            <button id="continue-cancel-button" aria-label="Close modal">&times;</button>
+            <h2>Continue the Story</h2>
+            <p>Describe what should happen next. The AI will use the existing story as context.</p>
+            <textarea id="continue-prompt-input" rows="4" placeholder="e.g., They venture into the dark forest and discover a hidden village..."></textarea>
+            <div class="form-row" style="margin-top: 1rem;">
+                <div>
+                    <label for="continue-chapter-count-input">New Chapters:</label>
+                    <input type="number" id="continue-chapter-count-input" value="1" min="1" max="10">
+                </div>
+                <div>
+                    <label for="continue-panels-per-chapter-input">Panels/Chapter:</label>
+                    <input type="number" id="continue-panels-per-chapter-input" value="4" min="1" max="24">
+                </div>
+            </div>
+            <div id="continue-loader" class="hidden">
+                <div class="spinner"></div>
+                <p>Generating new chapters...</p>
+            </div>
+            <p id="continue-error" class="error-message" style="display: none;"></p>
+            <div class="modal-actions">
+                <button id="continue-generate-button" class="reader-nav-button">Generate</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="index.tsx"></script>
+</body>
+</html>
